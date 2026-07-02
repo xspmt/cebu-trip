@@ -1,6 +1,6 @@
 const SUPABASE_URL = "https://ftbdipplulwxzfjqillg.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lhJBj_J3HtM4ba1C5msQJg_rdp8eOGr";
-const UPDATE_NOTE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/update-day-note`;
+const TRIP_EDIT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/trip-edit`;
 const TABLES = ["days", "day_times", "places", "segments"];
 
 const state = {
@@ -11,6 +11,8 @@ const state = {
   activeDayId: "overview",
   editPassword: "",
   editEnabled: false,
+  editing: { type: null, id: null },
+  addingTime: false,
   saveTimer: null,
   layers: [],
   routeCache: new Map()
@@ -51,7 +53,6 @@ function loadScript(src, timeoutMs = 6500) {
       resolve();
       return;
     }
-
     const script = document.createElement("script");
     const timer = window.setTimeout(() => reject(new Error(`${src} load timeout`)), timeoutMs);
     script.src = src;
@@ -111,10 +112,34 @@ function setSaveStatus(text) {
   els.saveStatus.textContent = text || "";
 }
 
+function errorMessage(error) {
+  return error && error.message ? error.message : "操作失败";
+}
+
 function setEditing(enabled) {
   state.editEnabled = enabled;
+  if (!enabled) state.editing = { type: null, id: null };
   els.dayNote.disabled = !enabled || state.activeDayId === "overview";
   els.unlockEdit.textContent = enabled ? "已解锁" : "编辑";
+}
+
+async function callTripEdit(action, payload) {
+  const response = await fetch(TRIP_EDIT_FUNCTION_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`
+    },
+    body: JSON.stringify({
+      action,
+      payload,
+      password: state.editPassword
+    })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || "保存失败");
+  return result;
 }
 
 async function saveDayNote() {
@@ -122,24 +147,13 @@ async function saveDayNote() {
   const note = els.dayNote.value;
   const day = state.days.find((item) => item.id === state.activeDayId);
   if (day) day.note = note;
-
   setSaveStatus("保存中...");
   try {
-    const response = await fetch(UPDATE_NOTE_FUNCTION_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        dayId: state.activeDayId,
-        note,
-        password: state.editPassword
-      })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "保存失败");
+    await callTripEdit("update_day_note", { dayId: state.activeDayId, note });
     setSaveStatus("已保存");
   } catch (error) {
     console.error(error);
-    setSaveStatus("保存失败");
+    setSaveStatus(errorMessage(error));
   }
 }
 
@@ -156,7 +170,7 @@ async function loadData() {
   } catch (error) {
     console.error(error);
     els.dayTitle.textContent = "数据读取失败";
-    els.dayNote.textContent = "请检查 Supabase 权限或浏览器控制台。";
+    els.dayNote.value = "请检查 Supabase 权限或浏览器控制台。";
   }
 }
 
@@ -169,13 +183,38 @@ function getDayData(dayId) {
       segments: sortByOrder(state.segments)
     };
   }
-
   return {
     day: state.days.find((day) => day.id === dayId),
     times: sortByOrder(state.dayTimes.filter((item) => item.day_id === dayId)),
     places: sortByOrder(state.places.filter((place) => place.day_id === dayId && place.lat !== null && place.lon !== null)),
     segments: sortByOrder(state.segments.filter((segment) => segment.day_id === dayId))
   };
+}
+
+function splitTimeRange(value) {
+  const text = String(value || "").trim();
+  if (text.includes("-")) {
+    const [start, end] = text.split("-").map((part) => part.trim());
+    return { start, end };
+  }
+  return { start: text, end: "" };
+}
+
+function combineTimeRange(start, end) {
+  if (start && end) return `${start}-${end}`;
+  return start || end || "";
+}
+
+function timeOptions(selected, includeBlank = false) {
+  const options = [];
+  if (includeBlank) options.push("");
+  for (let hour = 5; hour <= 23; hour += 1) {
+    for (const minute of ["00", "30"]) {
+      options.push(`${String(hour).padStart(2, "0")}:${minute}`);
+    }
+  }
+  if (selected && !options.includes(selected)) options.unshift(selected);
+  return options.map((time) => `<option value="${escapeHtml(time)}"${time === selected ? " selected" : ""}>${escapeHtml(time)}</option>`).join("");
 }
 
 function segmentType(mode) {
@@ -229,40 +268,110 @@ function renderTabs() {
       </button>
     `;
   }).join("");
-
   els.dayTabs.innerHTML = markup;
   els.mobileTabs.innerHTML = markup;
-
   document.querySelectorAll(".day-tab").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeDayId = button.dataset.dayId;
+      state.editing = { type: null, id: null };
       els.sidebar.classList.remove("open");
       render();
     });
   });
 }
 
-function renderLists(data) {
-  els.timeline.innerHTML = data.times.length
-    ? data.times.map((item) => `
+function editButtons(type, id) {
+  if (!state.editEnabled || state.activeDayId === "overview") return "";
+  return `
+    <span class="row-actions">
+      <button class="icon-tool" type="button" data-edit-type="${type}" data-edit-id="${escapeHtml(id)}" aria-label="编辑" title="编辑">✎</button>
+      <button class="icon-tool danger" type="button" data-delete-type="${type}" data-delete-id="${escapeHtml(id)}" aria-label="删除" title="删除">×</button>
+    </span>
+  `;
+}
+
+function renderTimeRow(item) {
+  const isEditing = state.editing.type === "time" && state.editing.id === item.id;
+  const range = splitTimeRange(item.time_text);
+  if (!isEditing) {
+    return `
       <li>
         <span class="badge">${escapeHtml(item.time_text)}</span>
-        <span>${escapeHtml(item.detail)}</span>
-      </li>
-    `).join("")
-    : '<li class="empty">暂无时间安排</li>';
-
-  els.placeList.innerHTML = data.places.length
-    ? data.places.map((place, index) => `
-      <li>
-        ${placeBadge(place, index)}
-        <span>
-          <strong>${escapeHtml(place.name)}</strong>
-          <span class="item-meta">${escapeHtml(place.note)}</span>
+        <span class="read-row">
+          <span>${escapeHtml(item.detail)}</span>
+          ${editButtons("time", item.id)}
         </span>
       </li>
-    `).join("")
-    : '<li class="empty">暂无地点</li>';
+    `;
+  }
+  return `
+    <li class="editable-row" data-time-id="${escapeHtml(item.id)}">
+      <select class="edit-time-start">${timeOptions(range.start)}</select>
+      <select class="edit-time-end">${timeOptions(range.end, true)}</select>
+      <input class="edit-detail" value="${escapeHtml(item.detail)}" aria-label="安排内容">
+      <button class="icon-tool save-time" type="button" aria-label="保存" title="保存">✓</button>
+      <button class="icon-tool cancel-edit" type="button" aria-label="取消" title="取消">×</button>
+    </li>
+  `;
+}
+
+function renderPlaceRow(place, index) {
+  const isEditing = state.editing.type === "place" && state.editing.id === place.id;
+  if (!isEditing) {
+    return `
+      <li>
+        ${placeBadge(place, index)}
+        <span class="read-row">
+          <span>
+            <strong>${escapeHtml(place.name)}</strong>
+            <span class="item-meta">${escapeHtml(place.note)}</span>
+          </span>
+          ${editButtons("place", place.id)}
+        </span>
+      </li>
+    `;
+  }
+  return `
+    <li class="editable-place" data-place-id="${escapeHtml(place.id)}">
+      <input class="edit-place-name" value="${escapeHtml(place.name)}" aria-label="地点名">
+      <input class="edit-place-note" value="${escapeHtml(place.note)}" aria-label="地点备注">
+      <div class="coord-row">
+        <input class="edit-place-lat" type="number" step="0.000001" value="${escapeHtml(place.lat)}" aria-label="纬度">
+        <input class="edit-place-lon" type="number" step="0.000001" value="${escapeHtml(place.lon)}" aria-label="经度">
+        <input class="edit-place-kind" value="${escapeHtml(place.kind || "spot")}" aria-label="类型">
+      </div>
+      <div class="edit-actions">
+        <button class="icon-tool save-place" type="button" aria-label="保存" title="保存">✓</button>
+        <button class="icon-tool cancel-edit" type="button" aria-label="取消" title="取消">×</button>
+      </div>
+    </li>
+  `;
+}
+
+function renderLists(data) {
+  els.timeline.innerHTML = [
+    ...(data.times.length ? data.times.map(renderTimeRow) : ['<li class="empty">暂无时间安排</li>']),
+    state.editEnabled && state.activeDayId !== "overview"
+      ? state.addingTime
+        ? `<li class="add-row">
+          <select id="new-time-start">${timeOptions("09:00")}</select>
+          <select id="new-time-end">${timeOptions("", true)}</select>
+          <input id="new-time-detail" value="新的安排" aria-label="新增安排内容">
+          <button class="icon-tool add-icon" id="confirm-add-time" type="button" aria-label="确认新增" title="确认新增">✓</button>
+          <button class="icon-tool" id="cancel-add-time" type="button" aria-label="取消新增" title="取消新增">×</button>
+        </li>`
+        : `<li class="add-collapsed-row">
+          <button class="icon-tool add-icon" id="show-add-time" type="button" aria-label="新增时间" title="新增时间">+</button>
+        </li>`
+      : ""
+  ].join("");
+
+  els.placeList.innerHTML = [
+    ...(data.places.length ? data.places.map(renderPlaceRow) : ['<li class="empty">暂无地点</li>']),
+    state.editEnabled && state.activeDayId !== "overview"
+      ? '<li><button class="add-button" id="add-place" type="button"><span aria-hidden="true">+</span> 新增地点</button></li>'
+      : ""
+  ].join("");
 
   els.segmentList.innerHTML = data.segments.length
     ? data.segments.map((segment) => `
@@ -275,6 +384,187 @@ function renderLists(data) {
       </li>
     `).join("")
     : '<li class="empty">暂无路线</li>';
+
+  bindListActions();
+}
+
+function bindListActions() {
+  document.querySelectorAll("[data-edit-type]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.editing = { type: button.dataset.editType, id: button.dataset.editId };
+      render();
+    });
+  });
+
+  document.querySelectorAll(".cancel-edit").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.editing = { type: null, id: null };
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-delete-type]").forEach((button) => {
+    button.addEventListener("click", () => deleteRow(button.dataset.deleteType, button.dataset.deleteId));
+  });
+
+  const saveTime = document.querySelector(".save-time");
+  if (saveTime) saveTime.addEventListener("click", saveEditingTime);
+
+  const savePlace = document.querySelector(".save-place");
+  if (savePlace) savePlace.addEventListener("click", saveEditingPlace);
+
+  const showAddTime = document.getElementById("show-add-time");
+  if (showAddTime) showAddTime.addEventListener("click", () => {
+    state.addingTime = true;
+    render();
+  });
+
+  const confirmAddTime = document.getElementById("confirm-add-time");
+  if (confirmAddTime) confirmAddTime.addEventListener("click", addTimeRow);
+
+  const cancelAddTime = document.getElementById("cancel-add-time");
+  if (cancelAddTime) cancelAddTime.addEventListener("click", () => {
+    state.addingTime = false;
+    render();
+  });
+
+  const addPlace = document.getElementById("add-place");
+  if (addPlace) addPlace.addEventListener("click", addPlaceRow);
+}
+
+async function saveEditingTime() {
+  const row = document.querySelector(".editable-row");
+  if (!row) return;
+  const id = row.dataset.timeId;
+  const item = state.dayTimes.find((time) => time.id === id);
+  item.time_text = combineTimeRange(
+    row.querySelector(".edit-time-start").value,
+    row.querySelector(".edit-time-end").value
+  );
+  item.detail = row.querySelector(".edit-detail").value;
+  setSaveStatus("保存中...");
+  try {
+    await callTripEdit("update_day_time", {
+      id,
+      time_text: item.time_text,
+      detail: item.detail
+    });
+    state.editing = { type: null, id: null };
+    setSaveStatus("已保存");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
+}
+
+async function saveEditingPlace() {
+  const row = document.querySelector(".editable-place");
+  if (!row) return;
+  const id = row.dataset.placeId;
+  const place = state.places.find((item) => item.id === id);
+  place.name = row.querySelector(".edit-place-name").value;
+  place.note = row.querySelector(".edit-place-note").value;
+  place.lat = toNumber(row.querySelector(".edit-place-lat").value);
+  place.lon = toNumber(row.querySelector(".edit-place-lon").value);
+  place.kind = row.querySelector(".edit-place-kind").value || "spot";
+  setSaveStatus("保存中...");
+  try {
+    await callTripEdit("update_place", {
+      id,
+      name: place.name,
+      note: place.note,
+      lat: place.lat,
+      lon: place.lon,
+      kind: place.kind
+    });
+    state.editing = { type: null, id: null };
+    state.routeCache.clear();
+    setSaveStatus("已保存");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
+}
+
+async function addTimeRow() {
+  if (!state.editEnabled || state.activeDayId === "overview") return;
+  const rows = state.dayTimes.filter((item) => item.day_id === state.activeDayId);
+  const timeText = combineTimeRange(
+    document.getElementById("new-time-start").value,
+    document.getElementById("new-time-end").value
+  );
+  const detail = document.getElementById("new-time-detail").value || "新的安排";
+  setSaveStatus("新增中...");
+  try {
+    const result = await callTripEdit("insert_day_time", {
+      day_id: state.activeDayId,
+      time_text: timeText,
+      detail,
+      sort_order: rows.length + 1
+    });
+    state.dayTimes.push(result.row);
+    state.addingTime = false;
+    setSaveStatus("已新增");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
+}
+
+async function addPlaceRow() {
+  if (!state.editEnabled || state.activeDayId === "overview") return;
+  const rows = state.places.filter((item) => item.day_id === state.activeDayId);
+  const existing = rows[rows.length - 1] || state.places.find((item) => item.lat !== null && item.lon !== null);
+  setSaveStatus("新增中...");
+  try {
+    const result = await callTripEdit("insert_place", {
+      day_id: state.activeDayId,
+      name: "新地点",
+      note: "",
+      lat: existing ? existing.lat : 10.3157,
+      lon: existing ? existing.lon : 123.8854,
+      kind: "spot",
+      plus_code: "",
+      sort_order: rows.length + 1
+    });
+    state.places.push({
+      ...result.row,
+      lat: toNumber(result.row.lat),
+      lon: toNumber(result.row.lon)
+    });
+    state.editing = { type: "place", id: result.row.id };
+    setSaveStatus("已新增");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
+}
+
+async function deleteRow(type, id) {
+  if (!state.editEnabled) return;
+  const label = type === "time" ? "这条时间安排" : "这个地点";
+  if (!window.confirm(`删除${label}？`)) return;
+  setSaveStatus("删除中...");
+  try {
+    if (type === "time") {
+      await callTripEdit("delete_day_time", { id });
+      state.dayTimes = state.dayTimes.filter((item) => item.id !== id);
+    } else {
+      await callTripEdit("delete_place", { id });
+      state.places = state.places.filter((item) => item.id !== id);
+      state.routeCache.clear();
+    }
+    state.editing = { type: null, id: null };
+    setSaveStatus("已删除");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
 }
 
 function clearMap() {
@@ -300,7 +590,6 @@ function routeStyle(segment) {
 function routeMidpoint(coords) {
   if (!coords.length) return [0, 0];
   if (coords.length === 1) return coords[0];
-
   let total = 0;
   const segments = [];
   for (let i = 0; i < coords.length - 1; i += 1) {
@@ -312,9 +601,7 @@ function routeMidpoint(coords) {
     segments.push({ a, b, length });
     total += length;
   }
-
   if (!total) return coords[0];
-
   const half = total / 2;
   let walked = 0;
   for (const segment of segments) {
@@ -327,14 +614,12 @@ function routeMidpoint(coords) {
     }
     walked += segment.length;
   }
-
   return coords[coords.length - 1];
 }
 
 async function fetchRoadRoute(from, to) {
-  const key = `${from.name}->${to.name}`;
+  const key = `${from.name}->${to.name}:${from.lat},${from.lon}:${to.lat},${to.lon}`;
   if (state.routeCache.has(key)) return state.routeCache.get(key);
-
   const url = `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=full&geometries=geojson`;
   const response = await fetch(url);
   if (!response.ok) throw new Error("OSRM route failed");
@@ -347,8 +632,7 @@ async function fetchRoadRoute(from, to) {
 }
 
 async function getRouteCoords(segment, from, to) {
-  const type = segmentType(segment.mode);
-  if (type === "road") {
+  if (segmentType(segment.mode) === "road") {
     try {
       return await fetchRoadRoute(from, to);
     } catch (error) {
@@ -411,7 +695,6 @@ async function addRoutes(data, bounds) {
     const from = findPlaceByName(segment.from_place);
     const to = findPlaceByName(segment.to_place);
     if (!from || !to) continue;
-
     const coords = await getRouteCoords(segment, from, to);
     const line = L.polyline(coords, routeStyle(segment)).bindPopup(`
       <strong>${escapeHtml(segment.from_place)} → ${escapeHtml(segment.to_place)}</strong><br>
@@ -435,7 +718,6 @@ async function renderMap(data) {
   if (state.activeDayId !== "overview") {
     addMarkers(data, bounds, labeledPlaces);
   }
-
   if (bounds.length > 1) {
     map.fitBounds(bounds, { padding: [34, 34], maxZoom: 13 });
   } else if (bounds.length === 1) {
@@ -447,7 +729,6 @@ function render() {
   if (!state.days.length) return;
   const data = getDayData(state.activeDayId);
   if (!data.day) return;
-
   renderTabs();
   els.dayTitle.textContent = data.day.title;
   els.dayNote.value = data.day.note || "";
@@ -463,12 +744,14 @@ els.unlockEdit.addEventListener("click", () => {
     if (!password) return;
     state.editPassword = password;
     setEditing(true);
+    render();
     setSaveStatus("已解锁");
     els.dayNote.focus();
     return;
   }
   setEditing(false);
   state.editPassword = "";
+  render();
   setSaveStatus("");
 });
 
