@@ -44,6 +44,7 @@
       display: grid;
       grid-template-columns: 440px 1fr;
       min-height: 100vh;
+      position: relative;
     }
 
     .sidebar {
@@ -53,6 +54,12 @@
       box-shadow: var(--shadow);
       overflow-y: auto;
       z-index: 400;
+      transition: transform 180ms ease;
+    }
+
+    .map-wrap {
+      position: relative;
+      min-height: 100vh;
     }
 
     .eyebrow {
@@ -304,6 +311,61 @@
       min-height: 100vh;
     }
 
+    .mobile-fab,
+    .floating-tabs {
+      display: none;
+    }
+
+    .mobile-fab {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 800;
+      border: 1px solid rgba(31, 42, 48, 0.12);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 10px 14px;
+      box-shadow: 0 10px 26px rgba(22, 35, 41, 0.18);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .floating-tabs {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      top: 12px;
+      z-index: 790;
+      gap: 8px;
+      overflow-x: auto;
+      padding-right: 96px;
+      scrollbar-width: none;
+    }
+
+    .floating-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .floating-tab {
+      flex: 0 0 auto;
+      border: 1px solid rgba(31, 42, 48, 0.12);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
+      cursor: pointer;
+      box-shadow: 0 8px 20px rgba(22, 35, 41, 0.14);
+      white-space: nowrap;
+    }
+
+    .floating-tab.active {
+      background: var(--tab-active);
+      color: #fff;
+      border-color: transparent;
+    }
+
     .marker {
       width: 28px;
       height: 28px;
@@ -375,8 +437,56 @@
     }
 
     @media (max-width: 980px) {
-      .layout { grid-template-columns: 1fr; }
-      #map { min-height: 72vh; }
+      body {
+        background: #efe6d9;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: min(88vw, 380px);
+        max-width: 380px;
+        transform: translateX(-102%);
+        z-index: 1000;
+      }
+
+      .sidebar.mobile-open {
+        transform: translateX(0);
+      }
+
+      .sidebar .section:first-of-type {
+        margin-top: 8px;
+      }
+
+      .tabs {
+        display: none;
+      }
+
+      .intro {
+        display: none;
+      }
+
+      .mobile-fab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .floating-tabs {
+        display: flex;
+      }
+
+      .map-wrap,
+      #map {
+        min-height: 100vh;
+        height: 100vh;
+      }
     }
   </style>
 </head>
@@ -485,7 +595,11 @@
       </section>
     </aside>
 
-    <main id="map" aria-label="旅行地图"></main>
+    <div class="map-wrap">
+      <div id="floating-tabs" class="floating-tabs" aria-label="地图日期切换"></div>
+      <button id="mobile-menu" class="mobile-fab" type="button">信息</button>
+      <main id="map" aria-label="旅行地图"></main>
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -662,11 +776,14 @@
     }).addTo(map);
 
     const tabsEl = document.getElementById("tabs");
+    const floatingTabsEl = document.getElementById("floating-tabs");
     const detailEl = document.getElementById("day-detail");
     const segmentNoteEl = document.getElementById("segment-note");
     const segmentListEl = document.getElementById("segment-list");
     const stopsSectionEl = document.getElementById("stops-section");
     const stopListEl = document.getElementById("stop-list");
+    const sidebarEl = document.querySelector(".sidebar");
+    const mobileMenuBtn = document.getElementById("mobile-menu");
     const toggleAdd = document.getElementById("toggle-add");
     const toggleEdit = document.getElementById("toggle-edit");
     const togglePresets = document.getElementById("toggle-presets");
@@ -932,6 +1049,10 @@
         tab.classList.toggle("active", tab.dataset.day === day.id);
       });
 
+      document.querySelectorAll(".floating-tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.day === day.id);
+      });
+
       detailEl.innerHTML = `
         <h3 class="day-title">${day.title}</h3>
         <p class="day-text">${day.text}</p>
@@ -968,6 +1089,14 @@
       button.addEventListener("click", () => renderDay(day.id));
       tabsEl.appendChild(button);
 
+      const floatingButton = document.createElement("button");
+      floatingButton.type = "button";
+      floatingButton.className = "floating-tab";
+      floatingButton.dataset.day = day.id;
+      floatingButton.textContent = day.label;
+      floatingButton.addEventListener("click", () => renderDay(day.id));
+      floatingTabsEl.appendChild(floatingButton);
+
       const option = document.createElement("option");
       option.value = day.id;
       option.textContent = `${day.label} · ${day.short}`;
@@ -977,6 +1106,7 @@
     toggleAdd.addEventListener("click", () => addPanel.classList.toggle("open"));
     toggleEdit.addEventListener("click", () => editPanel.classList.toggle("open"));
     togglePresets.addEventListener("click", () => presetsPanel.classList.toggle("open"));
+    mobileMenuBtn.addEventListener("click", () => sidebarEl.classList.toggle("mobile-open"));
 
     addPoiBtn.addEventListener("click", () => {
       const name = poiNameInput.value.trim();
