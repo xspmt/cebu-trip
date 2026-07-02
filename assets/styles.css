@@ -77,6 +77,31 @@ h2 {
   font-size: 15px;
 }
 
+.overview-collapsible h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-toggle {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(0, 142, 107, 0.24);
+  border-radius: 3px;
+  color: var(--deep);
+  background: rgba(251, 255, 242, 0.72);
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.overview-collapsible.collapsed .place-list,
+.overview-collapsible.collapsed .segment-list {
+  display: none;
+}
+
 .intro,
 .day-note,
 #data-status,
@@ -271,6 +296,11 @@ h2 {
   gap: 7px !important;
 }
 
+.editable-segment {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  gap: 7px !important;
+}
+
 .add-row {
   grid-template-columns: 1fr 1fr 34px 34px !important;
   gap: 6px !important;
@@ -288,6 +318,8 @@ h2 {
 
 .editable-row input,
 .editable-place input,
+.editable-segment input,
+.editable-segment select,
 .editable-row select,
 .add-row input,
 .add-row select {
@@ -302,10 +334,27 @@ h2 {
   font-size: 12px;
 }
 
+.editable-row select,
+.editable-place select,
+.editable-segment select,
+.add-row select {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-variant-emoji: emoji;
+}
+
 .coord-row {
   display: grid;
   grid-template-columns: 1fr 1fr 72px;
   gap: 6px;
+}
+
+.editable-segment .edit-segment-note,
+.editable-segment .edit-actions {
+  grid-column: 1 / -1;
+}
+
+.add-place-row .edit-actions {
+  grid-column: 1 / -1;
 }
 
 .add-button {
@@ -387,6 +436,15 @@ h2 {
   font-weight: 800;
 }
 
+.emoji-badge {
+  color: initial;
+  background: rgba(251, 255, 242, 0.78);
+  border: 1px solid rgba(0, 142, 107, 0.22);
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif;
+  font-variant-emoji: emoji;
+  font-size: 16px;
+}
+
 .route-label {
   display: grid;
   place-items: center;
@@ -402,6 +460,8 @@ h2 {
   font-size: 19px;
   line-height: 1;
   color: initial;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif;
+  font-variant-emoji: emoji;
   filter: drop-shadow(0 1px 2px rgba(28, 47, 39, 0.35));
 }
 
@@ -447,19 +507,19 @@ h2 {
   white-space: nowrap;
 }
 
-.badge.beach,
-.badge.stay,
-.badge.hotel {
+.badge.beach:not(.emoji-badge),
+.badge.stay:not(.emoji-badge),
+.badge.hotel:not(.emoji-badge) {
   background: var(--leaf);
 }
 
-.badge.port,
-.badge.pier,
-.badge.ferry {
+.badge.port:not(.emoji-badge),
+.badge.pier:not(.emoji-badge),
+.badge.ferry:not(.emoji-badge) {
   background: var(--ferry);
 }
 
-.badge.flight {
+.badge.flight:not(.emoji-badge) {
   background: var(--flight);
 }
 

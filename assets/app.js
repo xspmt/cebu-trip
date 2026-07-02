@@ -2,6 +2,30 @@ const SUPABASE_URL = "https://ftbdipplulwxzfjqillg.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lhJBj_J3HtM4ba1C5msQJg_rdp8eOGr";
 const TRIP_EDIT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/trip-edit`;
 const TABLES = ["days", "day_times", "places", "segments"];
+const flightSegments = [
+  {
+    id: "flight-d1",
+    day_id: "d1",
+    from_place: "PEK",
+    to_place: "CEB",
+    mode: "flight",
+    minutes: 645,
+    note: "2026/9/25 PEK 07:25 -> HKG 11:00 CX345；HKG 15:20 -> CEB 18:10 CX925",
+    sort_order: 0,
+    virtual: true
+  },
+  {
+    id: "flight-d12",
+    day_id: "d12",
+    from_place: "CEB",
+    to_place: "PEK",
+    mode: "flight",
+    minutes: 505,
+    note: "2026/10/6 CEB 12:00 -> HKG 15:00 CX948；HKG 17:00 -> PEK 20:25 CX312",
+    sort_order: 99,
+    virtual: true
+  }
+];
 
 const state = {
   days: [],
@@ -13,9 +37,15 @@ const state = {
   editEnabled: false,
   editing: { type: null, id: null },
   addingTime: false,
+  addingPlace: false,
+  addingSegment: false,
   saveTimer: null,
   layers: [],
-  routeCache: new Map()
+  routeCache: new Map(),
+  overviewCollapsed: {
+    places: true,
+    segments: true
+  }
 };
 
 const map = L.map("map", { zoomControl: true, scrollWheelZoom: true });
@@ -37,6 +67,47 @@ const els = {
   sidebar: document.getElementById("sidebar"),
   toggleSidebar: document.getElementById("toggle-sidebar")
 };
+
+function moveRoutePanelBeforePlaces() {
+  const routePanel = els.segmentList.closest(".panel");
+  const placePanel = els.placeList.closest(".panel");
+  if (routePanel && placePanel) {
+    placePanel.before(routePanel);
+  }
+}
+
+function configureOverviewPanel(listEl, key) {
+  const panel = listEl.closest(".panel");
+  const title = panel ? panel.querySelector("h2") : null;
+  if (!panel || !title) return;
+  const isOverview = state.activeDayId === "overview";
+  panel.classList.toggle("overview-collapsible", isOverview);
+  panel.classList.toggle("collapsed", isOverview && state.overviewCollapsed[key]);
+  if (!isOverview) {
+    const oldToggle = title.querySelector(".panel-toggle");
+    if (oldToggle) oldToggle.remove();
+    return;
+  }
+  let toggle = title.querySelector(".panel-toggle");
+  if (!toggle) {
+    toggle = document.createElement("button");
+    toggle.className = "panel-toggle";
+    toggle.type = "button";
+    title.appendChild(toggle);
+  }
+  const collapsed = state.overviewCollapsed[key];
+  toggle.textContent = collapsed ? "+" : "-";
+  toggle.setAttribute("aria-label", collapsed ? "展开" : "收起");
+  toggle.onclick = () => {
+    state.overviewCollapsed[key] = !state.overviewCollapsed[key];
+    render();
+  };
+}
+
+function configureOverviewPanels() {
+  configureOverviewPanel(els.segmentList, "segments");
+  configureOverviewPanel(els.placeList, "places");
+}
 
 function toNumber(value) {
   const number = Number(value);
@@ -105,7 +176,8 @@ function normalizeData(raw) {
   state.segments = sortByOrder(raw.segments || []).map((segment) => ({
     ...segment,
     minutes: toNumber(segment.minutes)
-  }));
+  })).filter((segment) => !flightSegments.some((flight) => flight.day_id === segment.day_id && segment.mode === "flight"));
+  state.segments = sortByOrder([...state.segments, ...flightSegments]);
 }
 
 function setSaveStatus(text) {
@@ -228,10 +300,10 @@ function modeIcon(mode) {
     car: "🚗",
     charter: "🚗",
     trike: "🛺",
-    motorbike: "🏍",
-    pier: "⛴",
-    ferry: "⛴",
-    flight: "✈"
+    motorbike: "🏍️",
+    pier: "⛴️",
+    ferry: "⛴️",
+    flight: "✈️"
   };
   return icons[mode] || "➜";
 }
@@ -245,13 +317,61 @@ function formatMinutes(minutes) {
 }
 
 function placeBadge(place, index) {
-  const label = place.kind ? place.kind.slice(0, 2).toUpperCase() : String(index + 1);
-  return `<span class="badge ${escapeHtml(place.kind)}">${escapeHtml(label)}</span>`;
+  return `<span class="badge emoji-badge ${escapeHtml(place.kind)}">${placeKindIcon(place.kind)}</span>`;
+}
+
+function placeKindIcon(kind) {
+  const icons = {
+    airport: "✈",
+    hotel: "🏨",
+    stay: "🏨",
+    port: "⛴",
+    pier: "⛴",
+    beach: "🏖",
+    waterfall: "📍",
+    falls: "📍",
+    food: "🍽",
+    mall: "🛍",
+    spot: "📍"
+  };
+  return icons[kind] || icons.spot;
 }
 
 function segmentBadge(segment) {
   const type = segmentType(segment.mode);
-  return `<span class="badge ${type}">${modeIcon(segment.mode)}</span>`;
+  return `<span class="badge emoji-badge ${type}">${modeIcon(segment.mode)}</span>`;
+}
+
+function modeOptions(selected) {
+  const modes = [
+    ["car", `${modeIcon("car")} car`],
+    ["charter", `${modeIcon("charter")} charter`],
+    ["trike", `${modeIcon("trike")} trike`],
+    ["motorbike", `${modeIcon("motorbike")} motorbike`],
+    ["ferry", `${modeIcon("ferry")} ferry`],
+    ["flight", `${modeIcon("flight")} flight`]
+  ];
+  return modes.map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`).join("");
+}
+
+function kindOptions(selected) {
+  if (selected === "stay") selected = "hotel";
+  const kinds = [
+    ["spot", `${placeKindIcon("spot")} 景点`],
+    ["hotel", `${placeKindIcon("hotel")} 酒店`],
+    ["port", `${placeKindIcon("port")} 码头`],
+    ["airport", `${placeKindIcon("airport")} 机场`],
+    ["beach", `${placeKindIcon("beach")} 海滩`],
+    ["food", `${placeKindIcon("food")} 餐饮`],
+    ["mall", `${placeKindIcon("mall")} 商场`]
+  ];
+  return kinds.map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`).join("");
+}
+
+function placeOptions(selected) {
+  return sortByOrder(state.places)
+    .map((place) => `<option value="${escapeHtml(place.name)}"${place.name === selected ? " selected" : ""}>${escapeHtml(place.name)}</option>`)
+    .join("");
 }
 
 function renderTabs() {
@@ -282,6 +402,7 @@ function renderTabs() {
 
 function editButtons(type, id) {
   if (!state.editEnabled || state.activeDayId === "overview") return "";
+  if (String(id).startsWith("flight-")) return "";
   return `
     <span class="row-actions">
       <button class="icon-tool" type="button" data-edit-type="${type}" data-edit-id="${escapeHtml(id)}" aria-label="编辑" title="编辑">✎</button>
@@ -338,7 +459,7 @@ function renderPlaceRow(place, index) {
       <div class="coord-row">
         <input class="edit-place-lat" type="number" step="0.000001" value="${escapeHtml(place.lat)}" aria-label="纬度">
         <input class="edit-place-lon" type="number" step="0.000001" value="${escapeHtml(place.lon)}" aria-label="经度">
-        <input class="edit-place-kind" value="${escapeHtml(place.kind || "spot")}" aria-label="类型">
+        <select class="edit-place-kind" aria-label="类型">${kindOptions(place.kind || "spot")}</select>
       </div>
       <div class="edit-actions">
         <button class="icon-tool save-place" type="button" aria-label="保存" title="保存">✓</button>
@@ -369,23 +490,88 @@ function renderLists(data) {
   els.placeList.innerHTML = [
     ...(data.places.length ? data.places.map(renderPlaceRow) : ['<li class="empty">暂无地点</li>']),
     state.editEnabled && state.activeDayId !== "overview"
-      ? '<li><button class="add-button" id="add-place" type="button"><span aria-hidden="true">+</span> 新增地点</button></li>'
+      ? state.addingPlace
+        ? `<li class="editable-place add-place-row">
+            <input id="new-place-name" value="新地点" aria-label="地点名">
+            <input id="new-place-note" value="" placeholder="备注" aria-label="地点备注">
+            <input id="new-place-plus" value="" placeholder="Google Plus Code" aria-label="Plus Code">
+            <div class="coord-row">
+              <input id="new-place-lat" type="number" step="0.000001" placeholder="纬度">
+              <input id="new-place-lon" type="number" step="0.000001" placeholder="经度">
+              <select id="new-place-kind">${kindOptions("spot")}</select>
+            </div>
+            <div class="edit-actions">
+              <button class="icon-tool add-icon" id="confirm-add-place" type="button" aria-label="确认新增" title="确认新增">✓</button>
+              <button class="icon-tool" id="cancel-add-place" type="button" aria-label="取消新增" title="取消新增">×</button>
+            </div>
+          </li>`
+        : '<li class="add-collapsed-row"><button class="icon-tool add-icon" id="show-add-place" type="button" aria-label="新增地点" title="新增地点">+</button></li>'
       : ""
   ].join("");
 
   els.segmentList.innerHTML = data.segments.length
-    ? data.segments.map((segment) => `
+    ? data.segments.map(renderSegmentRow).join("")
+    : '<li class="empty">暂无路线</li>';
+
+  if (state.editEnabled && state.activeDayId !== "overview") {
+    els.segmentList.innerHTML += state.addingSegment
+      ? `<li class="editable-segment add-segment-row">
+          <input id="new-segment-from" value="" placeholder="起点">
+          <input id="new-segment-to" value="" placeholder="终点">
+          <select id="new-segment-mode">${modeOptions("car")}</select>
+          <input id="new-segment-minutes" type="number" min="0" placeholder="分钟">
+          <input id="new-segment-note" value="" placeholder="备注">
+          <div class="edit-actions">
+            <button class="icon-tool add-icon" id="confirm-add-segment" type="button" aria-label="确认新增" title="确认新增">✓</button>
+            <button class="icon-tool" id="cancel-add-segment" type="button" aria-label="取消新增" title="取消新增">×</button>
+          </div>
+        </li>`
+      : '<li class="add-collapsed-row"><button class="icon-tool add-icon" id="show-add-segment" type="button" aria-label="新增路线" title="新增路线">+</button></li>';
+  }
+
+  bindListActions();
+}
+
+function renderSegmentRow(segment) {
+  const isEditing = state.editing.type === "segment" && state.editing.id === segment.id;
+  if (segment.virtual) {
+    return `
       <li>
         ${segmentBadge(segment)}
         <span>
           <strong>${escapeHtml(segment.from_place)} → ${escapeHtml(segment.to_place)}</strong>
-          <span class="item-meta">${escapeHtml(segment.note)}${segment.minutes ? ` · ${formatMinutes(segment.minutes)}` : ""}</span>
+          <span class="item-meta">${escapeHtml(segment.note)} · ${formatMinutes(segment.minutes)}</span>
         </span>
       </li>
-    `).join("")
-    : '<li class="empty">暂无路线</li>';
-
-  bindListActions();
+    `;
+  }
+  if (!isEditing) {
+    return `
+      <li>
+        ${segmentBadge(segment)}
+        <span class="read-row">
+          <span>
+            <strong>${escapeHtml(segment.from_place)} → ${escapeHtml(segment.to_place)}</strong>
+            <span class="item-meta">${escapeHtml(segment.note)}${segment.minutes ? ` · ${formatMinutes(segment.minutes)}` : ""}</span>
+          </span>
+          ${editButtons("segment", segment.id)}
+        </span>
+      </li>
+    `;
+  }
+  return `
+    <li class="editable-segment" data-segment-id="${escapeHtml(segment.id)}">
+      <input class="edit-segment-from" value="${escapeHtml(segment.from_place)}" placeholder="起点">
+      <input class="edit-segment-to" value="${escapeHtml(segment.to_place)}" placeholder="终点">
+      <select class="edit-segment-mode">${modeOptions(segment.mode)}</select>
+      <input class="edit-segment-minutes" type="number" min="0" value="${escapeHtml(segment.minutes || "")}" placeholder="分钟">
+      <input class="edit-segment-note" value="${escapeHtml(segment.note || "")}" placeholder="备注">
+      <div class="edit-actions">
+        <button class="icon-tool save-segment" type="button" aria-label="保存" title="保存">✓</button>
+        <button class="icon-tool cancel-edit" type="button" aria-label="取消" title="取消">×</button>
+      </div>
+    </li>
+  `;
 }
 
 function bindListActions() {
@@ -413,6 +599,24 @@ function bindListActions() {
   const savePlace = document.querySelector(".save-place");
   if (savePlace) savePlace.addEventListener("click", saveEditingPlace);
 
+  const saveSegment = document.querySelector(".save-segment");
+  if (saveSegment) saveSegment.addEventListener("click", saveEditingSegment);
+
+  const showAddSegment = document.getElementById("show-add-segment");
+  if (showAddSegment) showAddSegment.addEventListener("click", () => {
+    state.addingSegment = true;
+    render();
+  });
+
+  const confirmAddSegment = document.getElementById("confirm-add-segment");
+  if (confirmAddSegment) confirmAddSegment.addEventListener("click", addSegmentRow);
+
+  const cancelAddSegment = document.getElementById("cancel-add-segment");
+  if (cancelAddSegment) cancelAddSegment.addEventListener("click", () => {
+    state.addingSegment = false;
+    render();
+  });
+
   const showAddTime = document.getElementById("show-add-time");
   if (showAddTime) showAddTime.addEventListener("click", () => {
     state.addingTime = true;
@@ -428,8 +632,84 @@ function bindListActions() {
     render();
   });
 
-  const addPlace = document.getElementById("add-place");
-  if (addPlace) addPlace.addEventListener("click", addPlaceRow);
+  const showAddPlace = document.getElementById("show-add-place");
+  if (showAddPlace) showAddPlace.addEventListener("click", () => {
+    state.addingPlace = true;
+    render();
+  });
+
+  const confirmAddPlace = document.getElementById("confirm-add-place");
+  if (confirmAddPlace) confirmAddPlace.addEventListener("click", addPlaceRow);
+
+  const cancelAddPlace = document.getElementById("cancel-add-place");
+  if (cancelAddPlace) cancelAddPlace.addEventListener("click", () => {
+    state.addingPlace = false;
+    render();
+  });
+}
+
+async function saveEditingSegment() {
+  const row = document.querySelector(".editable-segment");
+  if (!row) return;
+  const id = row.dataset.segmentId;
+  const segment = state.segments.find((item) => item.id === id);
+  segment.from_place = row.querySelector(".edit-segment-from").value;
+  segment.to_place = row.querySelector(".edit-segment-to").value;
+  segment.mode = row.querySelector(".edit-segment-mode").value;
+  segment.minutes = toNumber(row.querySelector(".edit-segment-minutes").value);
+  segment.note = row.querySelector(".edit-segment-note").value;
+  setSaveStatus("保存中...");
+  try {
+    await callTripEdit("update_segment", {
+      id,
+      from_place: segment.from_place,
+      to_place: segment.to_place,
+      mode: segment.mode,
+      minutes: segment.minutes,
+      note: segment.note
+    });
+    state.editing = { type: null, id: null };
+    state.routeCache.clear();
+    setSaveStatus("已保存");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
+}
+
+async function addSegmentRow() {
+  if (!state.editEnabled || state.activeDayId === "overview") return;
+  const rows = state.segments.filter((item) => item.day_id === state.activeDayId);
+  const fromPlace = document.getElementById("new-segment-from").value;
+  const toPlace = document.getElementById("new-segment-to").value;
+  if (!fromPlace || !toPlace) {
+    setSaveStatus("请选择起点和终点");
+    return;
+  }
+  setSaveStatus("新增中...");
+  try {
+    const result = await callTripEdit("insert_segment", {
+      day_id: state.activeDayId,
+      from_place: fromPlace,
+      to_place: toPlace,
+      mode: document.getElementById("new-segment-mode").value,
+      minutes: toNumber(document.getElementById("new-segment-minutes").value),
+      note: document.getElementById("new-segment-note").value || "",
+      sort_order: rows.length + 1
+    });
+    state.segments.push({
+      ...result.row,
+      minutes: toNumber(result.row.minutes)
+    });
+    state.addingSegment = false;
+    state.routeCache.clear();
+    setSaveStatus("已新增");
+    render();
+  } catch (error) {
+    console.error(error);
+    setSaveStatus(errorMessage(error));
+  }
 }
 
 async function saveEditingTime() {
@@ -518,16 +798,34 @@ async function addPlaceRow() {
   if (!state.editEnabled || state.activeDayId === "overview") return;
   const rows = state.places.filter((item) => item.day_id === state.activeDayId);
   const existing = rows[rows.length - 1] || state.places.find((item) => item.lat !== null && item.lon !== null);
+  const plusCode = document.getElementById("new-place-plus").value.trim();
+  let lat = toNumber(document.getElementById("new-place-lat").value);
+  let lon = toNumber(document.getElementById("new-place-lon").value);
+  if (plusCode && window.OpenLocationCode) {
+    try {
+      const code = plusCode.toUpperCase().split(" ")[0];
+      const area = OpenLocationCode.decode(code);
+      lat = (area.latitudeLo + area.latitudeHi) / 2;
+      lon = (area.longitudeLo + area.longitudeHi) / 2;
+    } catch (error) {
+      setSaveStatus("Plus Code 无效");
+      return;
+    }
+  }
+  if (lat === null || lon === null) {
+    lat = existing ? existing.lat : 10.3157;
+    lon = existing ? existing.lon : 123.8854;
+  }
   setSaveStatus("新增中...");
   try {
     const result = await callTripEdit("insert_place", {
       day_id: state.activeDayId,
-      name: "新地点",
-      note: "",
-      lat: existing ? existing.lat : 10.3157,
-      lon: existing ? existing.lon : 123.8854,
-      kind: "spot",
-      plus_code: "",
+      name: document.getElementById("new-place-name").value || "新地点",
+      note: document.getElementById("new-place-note").value || "",
+      lat,
+      lon,
+      kind: document.getElementById("new-place-kind").value || "spot",
+      plus_code: plusCode,
       sort_order: rows.length + 1
     });
     state.places.push({
@@ -536,6 +834,7 @@ async function addPlaceRow() {
       lon: toNumber(result.row.lon)
     });
     state.editing = { type: "place", id: result.row.id };
+    state.addingPlace = false;
     setSaveStatus("已新增");
     render();
   } catch (error) {
@@ -692,6 +991,7 @@ function addMarkers(data, bounds, labeledPlaces = new Set()) {
 async function addRoutes(data, bounds) {
   const labeledPlaces = new Set();
   for (const segment of data.segments) {
+    if (segmentType(segment.mode) === "flight") continue;
     const from = findPlaceByName(segment.from_place);
     const to = findPlaceByName(segment.to_place);
     if (!from || !to) continue;
@@ -734,6 +1034,7 @@ function render() {
   els.dayNote.value = data.day.note || "";
   setEditing(state.editEnabled);
   setSaveStatus("");
+  configureOverviewPanels();
   renderLists(data);
   renderMap(data);
 }
@@ -757,4 +1058,5 @@ els.unlockEdit.addEventListener("click", () => {
 
 els.dayNote.addEventListener("input", scheduleSaveDayNote);
 els.toggleSidebar.addEventListener("click", () => els.sidebar.classList.toggle("open"));
+moveRoutePanelBeforePlaces();
 loadData();
