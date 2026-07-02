@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>2026 宿务中部旅行地图</title>
+  <title>Cebu Trip Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <link rel="stylesheet" href="assets/styles.css">
 </head>
@@ -12,17 +12,7 @@
     <aside class="sidebar" id="sidebar">
       <header class="trip-header">
         <p class="eyebrow">Cebu Trip Map</p>
-        <h1>2026 宿务中部旅行地图</h1>
-        <p class="intro">按天查看地点、时间安排和交通路线。数据优先从 Supabase 读取，离线或权限未开启时会回退到本地 CSV。</p>
       </header>
-
-      <section class="panel status-panel">
-        <div>
-          <h2>数据状态</h2>
-          <p id="data-status">正在读取行程数据...</p>
-        </div>
-        <button class="icon-button" id="refresh-data" type="button" aria-label="刷新数据" title="刷新数据">↻</button>
-      </section>
 
       <section class="panel">
         <h2>日期</h2>
@@ -31,11 +21,10 @@
 
       <section class="panel day-panel">
         <h2 id="day-title">行程</h2>
-        <p class="day-note" id="day-note"></p>
-        <div class="stats">
-          <span><strong id="stat-places">0</strong> 地点</span>
-          <span><strong id="stat-segments">0</strong> 路线</span>
-          <span><strong id="stat-times">0</strong> 时间点</span>
+        <textarea class="day-note-editor" id="day-note" rows="3" placeholder="备注"></textarea>
+        <div class="edit-row">
+          <button class="edit-button" id="unlock-edit" type="button">编辑</button>
+          <span class="save-status" id="save-status"></span>
         </div>
       </section>
 
