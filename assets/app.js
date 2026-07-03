@@ -1,7 +1,7 @@
 const SUPABASE_URL = "https://ftbdipplulwxzfjqillg.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lhJBj_J3HtM4ba1C5msQJg_rdp8eOGr";
+const TRIP_READ_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/trip-read`;
 const TRIP_EDIT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/trip-edit`;
-const TABLES = ["days", "day_times", "places", "segments"];
 const SIDEBAR_WIDTH_KEY = "cebu-trip-sidebar-width";
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 640;
@@ -35,10 +35,12 @@ const state = {
   dayTimes: [],
   places: [],
   segments: [],
+  authenticated: false,
   activeDayId: "overview",
   editPassword: "",
-  editEnabled: false,
+  editEnabled: true,
   editing: { type: null, id: null },
+  selectedRow: { type: null, id: null },
   addingTime: false,
   addingPlace: false,
   addingSegment: false,
@@ -233,14 +235,18 @@ function escapeHtml(value) {
 }
 
 async function loadSupabaseData() {
-  await loadScript("https://unpkg.com/@supabase/supabase-js@2");
-  const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  const requests = await Promise.all(TABLES.map(async (table) => {
-    const { data, error } = await client.from(table).select("*").order("sort_order", { ascending: true });
-    if (error) throw new Error(`${table}: ${error.message}`);
-    return [table, data || []];
-  }));
-  return Object.fromEntries(requests);
+  const response = await fetch(TRIP_READ_FUNCTION_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`
+    },
+    body: JSON.stringify({ password: state.editPassword })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || "数据读取失败");
+  return result;
 }
 
 function normalizeData(raw) {
@@ -270,7 +276,7 @@ function setEditing(enabled) {
   state.editEnabled = enabled;
   if (!enabled) state.editing = { type: null, id: null };
   els.dayNote.disabled = !enabled;
-  els.unlockEdit.textContent = enabled ? "已解锁" : "编辑";
+  els.unlockEdit.textContent = enabled ? "退出" : "进入";
 }
 
 async function callTripEdit(action, payload) {
@@ -330,9 +336,13 @@ function scheduleSaveDayNote() {
 async function loadData() {
   try {
     normalizeData(await loadSupabaseData());
+    state.authenticated = true;
+    setEditing(true);
     render();
   } catch (error) {
     console.error(error);
+    state.authenticated = false;
+    setEditing(false);
     els.dayTitle.textContent = "数据读取失败";
     els.dayNote.value = "请检查 Supabase 权限或浏览器控制台。";
   }
@@ -548,8 +558,9 @@ function renderTabs() {
 function editButtons(type, id) {
   if (!state.editEnabled || state.activeDayId === "overview") return "";
   if (String(id).startsWith("flight-")) return "";
+  const isVisible = state.selectedRow.type === type && state.selectedRow.id === id;
   return `
-    <span class="row-actions">
+    <span class="row-actions${isVisible ? " visible" : ""}">
       <button class="icon-tool" type="button" data-edit-type="${type}" data-edit-id="${escapeHtml(id)}" aria-label="编辑" title="编辑">✎</button>
       <button class="icon-tool danger" type="button" data-delete-type="${type}" data-delete-id="${escapeHtml(id)}" aria-label="删除" title="删除">×</button>
     </span>
@@ -561,7 +572,7 @@ function renderTimeRow(item) {
   const range = splitTimeRange(item.time_text);
   if (!isEditing) {
     return `
-      <li>
+      <li data-row-target="time" data-row-id="${escapeHtml(item.id)}">
         <span class="badge">${escapeHtml(item.time_text)}</span>
         <span class="read-row">
           <span>${escapeHtml(item.detail)}</span>
@@ -585,7 +596,7 @@ function renderPlaceRow(place, index) {
   const isEditing = state.editing.type === "place" && state.editing.id === place.id;
   if (!isEditing) {
     return `
-      <li>
+      <li data-row-target="place" data-row-id="${escapeHtml(place.id)}">
         ${placeBadge(place, index)}
         <span class="read-row">
           <span>
@@ -692,7 +703,7 @@ function renderSegmentRow(segment) {
   }
   if (!isEditing) {
     return `
-      <li>
+      <li data-row-target="segment" data-row-id="${escapeHtml(segment.id)}">
         ${segmentBadge(segment)}
         <span class="read-row">
           <span>
@@ -720,8 +731,19 @@ function renderSegmentRow(segment) {
 }
 
 function bindListActions() {
+  document.querySelectorAll("[data-row-target]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target instanceof HTMLElement && event.target.closest("button, input, select, textarea, a")) return;
+      const next = { type: row.getAttribute("data-row-target"), id: row.getAttribute("data-row-id") };
+      const isSame = state.selectedRow.type === next.type && state.selectedRow.id === next.id;
+      state.selectedRow = isSame ? { type: null, id: null } : next;
+      render();
+    });
+  });
+
   document.querySelectorAll("[data-edit-type]").forEach((button) => {
     button.addEventListener("click", () => {
+      state.selectedRow = { type: null, id: null };
       state.editing = { type: button.dataset.editType, id: button.dataset.editId };
       render();
     });
@@ -729,6 +751,7 @@ function bindListActions() {
 
   document.querySelectorAll(".cancel-edit").forEach((button) => {
     button.addEventListener("click", () => {
+      state.selectedRow = { type: null, id: null };
       state.editing = { type: null, id: null };
       render();
     });
@@ -1209,20 +1232,46 @@ function render() {
   renderMap(data);
 }
 
-els.unlockEdit.addEventListener("click", () => {
-  if (!state.editEnabled) {
-    const password = window.prompt("输入编辑密码");
-    if (!password) return;
-    state.editPassword = password;
-    setEditing(true);
-    render();
-    setSaveStatus("已解锁");
+function clearDataState() {
+  state.days = [];
+  state.dayTimes = [];
+  state.places = [];
+  state.segments = [];
+  state.activeDayId = "overview";
+  state.editing = { type: null, id: null };
+  state.addingTime = false;
+  state.addingPlace = false;
+  state.addingSegment = false;
+  clearMap();
+}
+
+async function promptAndLoadTrip() {
+  const password = window.prompt("输入访问密码");
+  if (!password) return;
+  state.editPassword = password;
+  setSaveStatus("加载中...");
+  await loadData();
+  if (state.authenticated) {
+    setSaveStatus("已进入");
     els.dayNote.focus();
+  }
+}
+
+els.unlockEdit.addEventListener("click", () => {
+  if (!state.authenticated) {
+    promptAndLoadTrip();
     return;
   }
+  if (!window.confirm("退出并清空当前已加载的行程数据？")) return;
+  state.authenticated = false;
   setEditing(false);
   state.editPassword = "";
-  render();
+  clearDataState();
+  els.dayTitle.textContent = "请输入密码查看行程";
+  els.dayNote.value = "";
+  els.timeline.innerHTML = "";
+  els.placeList.innerHTML = "";
+  els.segmentList.innerHTML = "";
   setSaveStatus("");
 });
 
@@ -1231,4 +1280,6 @@ els.toggleSidebar.addEventListener("click", () => els.sidebar.classList.toggle("
 moveRoutePanelBeforePlaces();
 restoreSidebarWidth();
 setupSidebarResize();
-loadData();
+setEditing(false);
+els.dayTitle.textContent = "请输入密码查看行程";
+promptAndLoadTrip();

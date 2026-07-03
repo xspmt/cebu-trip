@@ -422,11 +422,28 @@ h2 {
   align-items: start;
 }
 
+[data-row-target] {
+  cursor: pointer;
+}
+
+[data-row-target]:hover .read-row,
+[data-row-target]:focus-within .read-row {
+  opacity: 1;
+}
+
 .row-actions,
 .edit-actions {
   display: flex;
   gap: 5px;
   margin-top: 0;
+}
+
+.row-actions {
+  display: none;
+}
+
+.row-actions.visible {
+  display: flex;
 }
 
 .edit-actions {
