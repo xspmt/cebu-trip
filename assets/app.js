@@ -46,6 +46,7 @@ const state = {
   layers: [],
   routeCache: new Map(),
   overviewCollapsed: {
+    note: false,
     places: true,
     segments: true
   }
@@ -63,6 +64,7 @@ const els = {
   mobileTabs: document.getElementById("mobile-tabs"),
   dayTitle: document.getElementById("day-title"),
   dayNote: document.getElementById("day-note"),
+  dayPanel: document.querySelector(".day-panel"),
   unlockEdit: document.getElementById("unlock-edit"),
   saveStatus: document.getElementById("save-status"),
   timeline: document.getElementById("timeline"),
@@ -146,6 +148,10 @@ function setupSidebarResize() {
 
 function configureOverviewPanel(listEl, key) {
   const panel = listEl.closest(".panel");
+  configureOverviewSection(panel, key);
+}
+
+function configureOverviewSection(panel, key) {
   const title = panel ? panel.querySelector("h2") : null;
   if (!panel || !title) return;
   const isOverview = state.activeDayId === "overview";
@@ -176,6 +182,7 @@ function configureOverviewPanels() {
   if (els.timelinePanel) {
     els.timelinePanel.hidden = state.activeDayId === "overview";
   }
+  configureOverviewSection(els.dayPanel, "note");
   configureOverviewPanel(els.segmentList, "segments");
   configureOverviewPanel(els.placeList, "places");
 }
@@ -262,7 +269,7 @@ function errorMessage(error) {
 function setEditing(enabled) {
   state.editEnabled = enabled;
   if (!enabled) state.editing = { type: null, id: null };
-  els.dayNote.disabled = !enabled || state.activeDayId === "overview";
+  els.dayNote.disabled = !enabled;
   els.unlockEdit.textContent = enabled ? "已解锁" : "编辑";
 }
 
@@ -286,7 +293,21 @@ async function callTripEdit(action, payload) {
 }
 
 async function saveDayNote() {
-  if (!state.editEnabled || state.activeDayId === "overview") return;
+  if (!state.editEnabled) return;
+  if (state.activeDayId === "overview") {
+    const note = els.dayNote.value;
+    const overviewDay = state.days.find((item) => item.id === "overview");
+    if (overviewDay) overviewDay.note = note;
+    setSaveStatus("保存中...");
+    try {
+      await callTripEdit("update_day_note", { dayId: "overview", note });
+      setSaveStatus("已保存");
+    } catch (error) {
+      console.error(error);
+      setSaveStatus(errorMessage(error));
+    }
+    return;
+  }
   const note = els.dayNote.value;
   const day = state.days.find((item) => item.id === state.activeDayId);
   if (day) day.note = note;
@@ -319,10 +340,11 @@ async function loadData() {
 
 function getDayData(dayId) {
   if (dayId === "overview") {
+    const overviewDay = state.days.find((day) => day.id === "overview");
     return {
-      day: { id: "overview", title: "总览", note: "" },
+      day: overviewDay || { id: "overview", title: "总览", note: "" },
       times: [],
-      places: sortByOrder(state.places.filter((place) => place.lat !== null && place.lon !== null)),
+      places: overviewPlaces(),
       segments: sortByOrder(state.segments)
     };
   }
@@ -332,6 +354,45 @@ function getDayData(dayId) {
     places: sortByOrder(state.places.filter((place) => place.day_id === dayId && place.lat !== null && place.lon !== null)),
     segments: sortByOrder(state.segments.filter((segment) => segment.day_id === dayId))
   };
+}
+
+function daySortValue(dayId) {
+  const day = state.days.find((item) => item.id === dayId);
+  return Number(day?.sort_order || 0);
+}
+
+function staySummary(place, rows) {
+  const dayIds = [...new Set(rows.map((item) => item.day_id).filter(Boolean))];
+  if (!dayIds.length) return place.note || "";
+  const isStay = place.kind === "hotel" || place.kind === "stay";
+  if (isStay) {
+    const nightCount = Math.max(1, dayIds.length - 1);
+    return `住 ${nightCount} 晚`;
+  }
+  return place.note || rows.find((item) => item.note)?.note || "";
+}
+
+function overviewPlaces() {
+  const groups = new Map();
+  sortByOrder(state.places)
+    .filter((place) => place.day_id !== "overview" && place.lat !== null && place.lon !== null)
+    .forEach((place) => {
+      const existing = groups.get(place.name);
+      if (existing) {
+        existing.rows.push(place);
+        return;
+      }
+      groups.set(place.name, { first: place, rows: [place] });
+    });
+
+  return [...groups.values()]
+    .map(({ first, rows }) => ({
+      ...first,
+      note: staySummary(first, rows),
+      dayOrder: Math.min(...rows.map((item) => daySortValue(item.day_id)))
+    }))
+    .sort((a, b) => a.dayOrder - b.dayOrder || Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .map(({ dayOrder, ...place }) => place);
 }
 
 function splitTimeRange(value) {
@@ -459,7 +520,9 @@ function placeSelectOptions(selected, placeholder) {
 function renderTabs() {
   const tabs = [
     { id: "overview", label: "总览", title: "总览" },
-    ...state.days.map((day) => ({ id: day.id, label: formatDayLabel(day), title: day.title }))
+    ...state.days
+      .filter((day) => day.id !== "overview")
+      .map((day) => ({ id: day.id, label: formatDayLabel(day), title: day.title }))
   ];
   const markup = tabs.map((tab) => {
     const active = tab.id === state.activeDayId ? " active" : "";

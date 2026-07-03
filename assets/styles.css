@@ -145,6 +145,10 @@ h2 {
   display: none;
 }
 
+.overview-collapsible.collapsed .day-note-editor {
+  display: none;
+}
+
 .intro,
 .day-note,
 #data-status,
