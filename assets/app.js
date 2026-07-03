@@ -2,6 +2,9 @@ const SUPABASE_URL = "https://ftbdipplulwxzfjqillg.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lhJBj_J3HtM4ba1C5msQJg_rdp8eOGr";
 const TRIP_EDIT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/trip-edit`;
 const TABLES = ["days", "day_times", "places", "segments"];
+const SIDEBAR_WIDTH_KEY = "cebu-trip-sidebar-width";
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 640;
 const flightSegments = [
   {
     id: "flight-d1",
@@ -55,6 +58,7 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 map.setView([9.82, 123.64], 8);
 
 const els = {
+  appShell: document.querySelector(".app-shell"),
   dayTabs: document.getElementById("day-tabs"),
   mobileTabs: document.getElementById("mobile-tabs"),
   dayTitle: document.getElementById("day-title"),
@@ -62,9 +66,11 @@ const els = {
   unlockEdit: document.getElementById("unlock-edit"),
   saveStatus: document.getElementById("save-status"),
   timeline: document.getElementById("timeline"),
+  timelinePanel: document.getElementById("timeline")?.closest(".panel"),
   placeList: document.getElementById("place-list"),
   segmentList: document.getElementById("segment-list"),
   sidebar: document.getElementById("sidebar"),
+  sidebarResizer: document.getElementById("sidebar-resizer"),
   toggleSidebar: document.getElementById("toggle-sidebar")
 };
 
@@ -74,6 +80,68 @@ function moveRoutePanelBeforePlaces() {
   if (routePanel && placePanel) {
     placePanel.before(routePanel);
   }
+}
+
+function clampSidebarWidth(width) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+}
+
+function syncSidebarDensity(width) {
+  if (!els.appShell) return;
+  els.appShell.classList.toggle("compact-sidebar", width <= 320);
+  els.appShell.classList.toggle("tight-sidebar", width <= 260);
+}
+
+function applySidebarWidth(width) {
+  const nextWidth = clampSidebarWidth(width);
+  document.documentElement.style.setProperty("--sidebar-width", `${nextWidth}px`);
+  syncSidebarDensity(nextWidth);
+  map.invalidateSize(false);
+  return nextWidth;
+}
+
+function restoreSidebarWidth() {
+  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  if (Number.isFinite(storedWidth)) {
+    applySidebarWidth(storedWidth);
+    return;
+  }
+  syncSidebarDensity(clampSidebarWidth(els.sidebar?.getBoundingClientRect().width || SIDEBAR_MIN_WIDTH));
+}
+
+function setupSidebarResize() {
+  if (!els.sidebarResizer || !els.appShell) return;
+
+  let pointerId = null;
+
+  const onPointerMove = (event) => {
+    if (event.pointerId !== pointerId) return;
+    const nextWidth = applySidebarWidth(event.clientX);
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(nextWidth));
+  };
+
+  const stopResize = (event) => {
+    if (event && event.pointerId !== pointerId) return;
+    if (pointerId !== null && els.sidebarResizer.hasPointerCapture(pointerId)) {
+      els.sidebarResizer.releasePointerCapture(pointerId);
+    }
+    pointerId = null;
+    els.appShell.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", stopResize);
+    window.removeEventListener("pointercancel", stopResize);
+  };
+
+  els.sidebarResizer.addEventListener("pointerdown", (event) => {
+    if (window.innerWidth <= 920) return;
+    pointerId = event.pointerId;
+    els.appShell.classList.add("is-resizing");
+    els.sidebarResizer.setPointerCapture(pointerId);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    onPointerMove(event);
+  });
 }
 
 function configureOverviewPanel(listEl, key) {
@@ -105,6 +173,9 @@ function configureOverviewPanel(listEl, key) {
 }
 
 function configureOverviewPanels() {
+  if (els.timelinePanel) {
+    els.timelinePanel.hidden = state.activeDayId === "overview";
+  }
   configureOverviewPanel(els.segmentList, "segments");
   configureOverviewPanel(els.placeList, "places");
 }
@@ -369,9 +440,20 @@ function kindOptions(selected) {
 }
 
 function placeOptions(selected) {
-  return sortByOrder(state.places)
+  const uniquePlaces = [];
+  const seenNames = new Set();
+  sortByOrder(state.places).forEach((place) => {
+    if (seenNames.has(place.name)) return;
+    seenNames.add(place.name);
+    uniquePlaces.push(place);
+  });
+  return uniquePlaces
     .map((place) => `<option value="${escapeHtml(place.name)}"${place.name === selected ? " selected" : ""}>${escapeHtml(place.name)}</option>`)
     .join("");
+}
+
+function placeSelectOptions(selected, placeholder) {
+  return `<option value="">${escapeHtml(placeholder)}</option>${placeOptions(selected)}`;
 }
 
 function renderTabs() {
@@ -516,8 +598,8 @@ function renderLists(data) {
   if (state.editEnabled && state.activeDayId !== "overview") {
     els.segmentList.innerHTML += state.addingSegment
       ? `<li class="editable-segment add-segment-row">
-          <input id="new-segment-from" value="" placeholder="起点">
-          <input id="new-segment-to" value="" placeholder="终点">
+          <select id="new-segment-from">${placeSelectOptions("", "起点")}</select>
+          <select id="new-segment-to">${placeSelectOptions("", "终点")}</select>
           <select id="new-segment-mode">${modeOptions("car")}</select>
           <input id="new-segment-minutes" type="number" min="0" placeholder="分钟">
           <input id="new-segment-note" value="" placeholder="备注">
@@ -561,8 +643,8 @@ function renderSegmentRow(segment) {
   }
   return `
     <li class="editable-segment" data-segment-id="${escapeHtml(segment.id)}">
-      <input class="edit-segment-from" value="${escapeHtml(segment.from_place)}" placeholder="起点">
-      <input class="edit-segment-to" value="${escapeHtml(segment.to_place)}" placeholder="终点">
+      <select class="edit-segment-from">${placeSelectOptions(segment.from_place, "起点")}</select>
+      <select class="edit-segment-to">${placeSelectOptions(segment.to_place, "终点")}</select>
       <select class="edit-segment-mode">${modeOptions(segment.mode)}</select>
       <input class="edit-segment-minutes" type="number" min="0" value="${escapeHtml(segment.minutes || "")}" placeholder="分钟">
       <input class="edit-segment-note" value="${escapeHtml(segment.note || "")}" placeholder="备注">
@@ -960,10 +1042,10 @@ function addRouteLabel(segment, coords) {
 
 function addPlaceNameLabel(place) {
   const label = L.divIcon({
-    className: "",
+    className: "place-name-icon",
     html: `<div class="place-name-label">${escapeHtml(place.name)}</div>`,
-    iconSize: [160, 24],
-    iconAnchor: [80, 34]
+    iconSize: [0, 0],
+    iconAnchor: [0, 0]
   });
   const marker = L.marker([place.lat, place.lon], { icon: label, interactive: false }).addTo(map);
   state.layers.push(marker);
@@ -986,6 +1068,25 @@ function addMarkers(data, bounds, labeledPlaces = new Set()) {
     if (labeledPlaces.has(place.name)) addPlaceNameLabel(place);
     bounds.push([place.lat, place.lon]);
   });
+}
+
+function mapPaddingForLabels(data, labeledPlaces = new Set()) {
+  const longestLabelLength = data.places
+    .filter((place) => labeledPlaces.has(place.name))
+    .reduce((maxLength, place) => Math.max(maxLength, place.name.length), 10);
+  const estimatedLabelWidth = Math.max(72, Math.ceil(longestLabelLength * 9.5 + 24));
+  const horizontalPadding = Math.max(34, Math.ceil(estimatedLabelWidth / 2) + 12);
+
+  return {
+    paddingTopLeft: [horizontalPadding, 58],
+    paddingBottomRight: [horizontalPadding, 34]
+  };
+}
+
+function preferredMapZoom(day) {
+  if (!day?.trip_date) return 13;
+  if (day.trip_date === "2026-09-28") return 14;
+  return 13;
 }
 
 async function addRoutes(data, bounds) {
@@ -1015,13 +1116,19 @@ async function renderMap(data) {
   clearMap();
   const bounds = [];
   const labeledPlaces = await addRoutes(data, bounds);
+  const labelPadding = mapPaddingForLabels(data, labeledPlaces);
+  const maxZoom = preferredMapZoom(data.day);
   if (state.activeDayId !== "overview") {
     addMarkers(data, bounds, labeledPlaces);
   }
   if (bounds.length > 1) {
-    map.fitBounds(bounds, { padding: [34, 34], maxZoom: 13 });
+    map.fitBounds(bounds, { ...labelPadding, maxZoom });
   } else if (bounds.length === 1) {
-    map.setView(bounds[0], 13);
+    map.setView(bounds[0], maxZoom);
+    map.panBy([
+      Math.round((labelPadding.paddingTopLeft[0] - labelPadding.paddingBottomRight[0]) / 2),
+      Math.round((labelPadding.paddingTopLeft[1] - labelPadding.paddingBottomRight[1]) / 2)
+    ]);
   }
 }
 
@@ -1059,4 +1166,6 @@ els.unlockEdit.addEventListener("click", () => {
 els.dayNote.addEventListener("input", scheduleSaveDayNote);
 els.toggleSidebar.addEventListener("click", () => els.sidebar.classList.toggle("open"));
 moveRoutePanelBeforePlaces();
+restoreSidebarWidth();
+setupSidebarResize();
 loadData();
