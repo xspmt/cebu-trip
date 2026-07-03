@@ -1,1 +1,1 @@
-# Cebu Trip Map
+#  Trip Map
